@@ -1,0 +1,91 @@
+[11-28] Volumetric Clound : https://shaderbits.com/blog/creating-volumetric-ray-marcher
+
+<Box aligned artifact 없애기 -> aligned with planes>
+
+// Plane Alignment
+// get object scale factor
+//NOTE: This assumes the volume will only be UNIFORMLY scaled. Non uniform scale would require tons of little changes.
+//Input : MaxSteps, StepSize
+float scale = length( TransformLocalVectorToWorld(Parameters, float3(1.00000000,0.00000000,0.00000000)).xyz);
+float worldstepsize = scale * Primitive.LocalObjectBoundsMax.x*2 / MaxSteps;
+
+float camdist = length( ResolvedView.WorldCameraOrigin - GetObjectWorldPosition(Parameters) );
+float planeoffset = GetScreenPosition(Parameters).w / worldstepsize;
+float actoroffset = camdist / worldstepsize;
+planeoffset = frac( planeoffset - actoroffset);
+
+float3 localcamvec = normalize( mul(Parameters.CameraVector, Primitive.WorldToLocal) );
+
+float3 offsetvec = localcamvec * StepSize * planeoffset;
+
+return float4(offsetvec, planeoffset * worldstepsize);
+
+-> 난 이 현상 발생안하는듯? 왜 똑같은거 같지?
+-> 이해가 잘 안됨. 
+    artifact가 발생하는 이유가 'sampling 시작 위치가 Box의 모서리와 align 되어있어서 시작 위치를 'view dir에 
+    평행한 평면에 align 시키면 artifact를 줄일 수 있다' (?? 처음 이유도 이해안되고, 나중도 이해 안 됨)
+-> 이 함수의 output은 어디로 들어가는거? 이 시작지점이 raymarch 코드에 들어가야하는 거아닌가?
+-> 이 식은 그냥 대충 설명하거나 설명 아에 안해도 괜찮을 듯
+-> 언제 쓰는거지..?
+
+<Ray marching distance 조절하기, Volume의 끝까지 도달하게, Edge에서는 Sampling 하지 않게>
+
+//bring vectors into local space to support object transforms
+//Input : MaxSteps, PlaneAlignment
+float3 localcampos = mul(float4( ResolvedView.WorldCameraOrigin,1.00000000), (GetPrimitiveData(Parameters.CameraVector).WorldToLocal)).xyz;
+float3 localcamvec = -normalize( mul(Parameters.CameraVector, GetPrimitiveData(Parameters.CameraVector).WorldToLocal) );
+
+//make camera position 0-1
+localcampos = (localcampos / (GetPrimitiveData(Parameters.CameraVector).LocalObjectBoundsMax.x * 2)) + 0.5;
+
+float3 invraydir = 1 / localcamvec;
+
+float3 firstintersections = (0 - localcampos) * invraydir;
+float3 secondintersections = (1 - localcampos) * invraydir;
+float3 closest = min(firstintersections, secondintersections);
+float3 furthest = max(firstintersections, secondintersections);
+
+float t0 = max(closest.x, max(closest.y, closest.z));
+float t1 = min(furthest.x, min(furthest.y, furthest.z));
+
+float planeoffset = 1-frac( ( t0 - length(localcampos-0.5) ) * MaxSteps );
+
+t0 += (planeoffset / MaxSteps) * PlaneAlignment;
+t0 = max(0, t0);
+
+float boxthickness = max(0, t1 - t0);
+float3 entrypos = localcampos + (max(0,t0) * localcamvec);
+
+return float4( entrypos, boxthickness );
+
+-> 이게 Ray March Cube Setup 노드인 듯
+-> PlaneAlignment는 bool 값에 해당한다.
+-> 위에 있는 float4 out하는 식을 써야하는 거아닌가?
+
+
+<Sorting, Camera가 Volume 내부로 들어갈 수 있게하고 Volume 내부의 다른 object의 sort를 계산>
+위의 코드에 이 아래 코드를 추가해야한다.
+
+float scale = length( TransformLocalVectorToWorld(Parameters, float3(1.00000000,0.00000000,0.00000000)).xyz);
+float localscenedepth = CalcSceneDepth(ScreenAlignedPosition(GetScreenPosition(Parameters)));
+
+float3 camerafwd = mul(float3(0.00000000,0.00000000,1.00000000),ResolvedView.ViewToTranslatedWorld);
+localscenedepth /= (Primitive.LocalObjectBoundsMax.x * 2 * scale);
+localscenedepth /= abs( dot( camerafwd, Parameters.CameraVector ) );
+
+
+//this line goes just before the line: t0 = max(0, t0);
+
+t1 = min(t1, localscenedepth);
+
+-> trace를 밖에서 시작하기위해서 여태까지 local position을 써왔다 (geometry의) 
+    -> 이렇게하면 물체 내부로 카메라가 진입불가
+-> 이전에 Box Intersection에서 계산된 Ray Entry Position 를 사용해야한다.
+    + 폴리곤의 face를 내부쪽으로 뒤집어야한다. (왜??) (어떻게 뒤집음?)
+-> 이게 가능한 이유
+    1. ray가 volume 밖에서 어디에 hit 할지 알기 때문
+    2. ray가 volume 내에서 얼마나 진행할지 알기 때문
+-> 위의 2개를 하면, camera가 volume내부로 들어가는건 괜찮은데, object sort를 해주어야한다 (따로)
+    안하면 volume내부의 물체가 항상 가장 나중에 그려진다(always on top of the volume)
+-> localized scene depth를 box안 ray distance 계산시 사용해주어야 한다.
+
