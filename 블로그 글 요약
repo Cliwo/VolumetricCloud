@@ -1,0 +1,206 @@
+[#1]
+- light의 absorption과 scattering을 잘 모델링해야한다.
+- Absorption (A) 와 Scattering (S)의 비가 diffuse를 결정
+
+[#2]
+- 여기서는 out-scattering만 고려할 것이다  
+<- 내가 참고하는 부분과 다른 점. volume에 hit한 light의 scattering만 고려
+- In-scattering은 volume내에서 scattering계산, 여기서 너무 비싸다
+- Out-scattering 결과를 blur하는 것으로 근사할 수 있다.
+
+[#3]
+- brute force method 사용할 것 
+    - light 에서 density sample point를 향해서 ray march
+    - cost는 Density Steps * Shadow Steps(비싸다)
+    - 기호로 표현하면 N * M
+
+[#4]
+- 위의 그림은 Density Point에서 Shadow Point를 샘플링하는 그림
+- 파란색 선위의 노란 점들이 Density Point 인 듯.
+- Density Point에서 Light Dir 방향으로 Shadow Point를 샘플
+- Shadow Point는 'Volume 내부' 에서만 하면 된다.
+    - 즉 일찍 종료할 수 있다.
+    - N * M을 조금 줄일 수 있다.
+
+[#5]
+- 각 Sample에서 density는 얼마나 많은 빛이 scatter되는지 결정
+- 이는 다음 iteration에서 투과가 얼마나 줄어드는지도 영향을 미침
+- 그 Sample에서 얼마의 빛 에너지가 만들어지는지 shader가 계산
+    - light를 향해 raymarch해서 (?? 여기 맞나?)
+- camera에 들어오는 light는 
+    - total photon path length (point에서 출발, volume내에서의)
+    - scattering coefficeint (point에서 정의되는)
+    - 이 두가지에 의해 결정된다.
+    - (식)
+    ? 식에서 v는 뭐고 x는 뭐지?
+    ? Cout은 어디로 나가는거고 Cin은 어디로 들어오는 것?
+    ? x가 volume내의 point인가? 
+    ? v가 point에서 camera로 향하는 벡터?
+
+[#6]
+- 위의 식은 camera로 향하는 'single light path'만 고려한다.
+- light propagation을 제대로 계산하기 위해 
+    - ray sampling (ray march)를 수정해야한다.
+
+[#7]
+- Linear Density : point x에서 정의
+    - Opacity * Density.
+- Linear Density(x, x') : x부터 x'사이에 누적되는 Linear Density
+    - (적분식)
+        - (s)는 sample point, x와 x'사이의
+- Transmittance(x, x') = (식)
+    - 이 식은 위에서 본 Beer-Lambert식임.
+    - (투과량) = (자연상수) ^ -((volume내에서 투과한 거리) * (밀도))
+        - volume내에서 투과한 거리 (volume의 두깨)가 증가할 수록 투과량 감소
+            - logaric으로 감소
+        - 농도가 증가해도 감소
+            - 마찬가지로 logaric으로 감소
+    - 이 식이 'density-only ray march'에서 density 계산법
+        - lighting 계산을 위해서 scattering과 absorption 고려 필요
+        - 이를 위한 term들을 식에 구겨넣어보자
+        - (OutScattering 식)
+            - w라는 빛의 방향을 향한 point x에서 OutScattering
+            - l은 위치 벡터 (point)
+                - l은 volume 밖의 점
+                - light direction과 반대 
+                    ? light dir은 빛에서 나오는 방향인가? 
+            - -LinearDensity(x,l) 이라는 텀은
+                - x라는 point에서 부터 light를 향해 volume 경계까지
+                - 쌓인 linear Density를 의미한다. 
+                - light를 흡수한 입자들의 양을 의미하기도 한다 (??)
+            - 이 값은 결국 point에서의 light양이다.
+                - opcaity에 의해 흡수된 빛의 양은 아직 고려되지 않음
+                - opcaity를 고려하기위해 Opacity(x)를 곱함
+                - 대기산란 또한 따로 고려되야한다. 
+                     - 대기산란 term은 따로 추가 안했음.
+    - (TotalOutScattering 식)
+        - OutScattering과 (투과량) 고려 
+        - OutScattering에 opcity(x)곱하는거 까먹었음 ㅋ (고려하세요)
+        - OutScattering(OS)는 light color와 diffse color가 시작부터 곱해져 있을 것 (해석 맞나?)
+
+[#8]
+- 이 TotalOutScattering 식을 다른 paper에서 'Radiance(L)'로 표현하는 경우가 많다.
+    - 여기서는 제외(?)할 것
+        - radiance는 volume뒤의 background color의 투과도 고려하니까
+            - 이 투과는 SceneColor * FinalOpacity임.
+            - 이런 이유로 안 넣을것 (이게 어떻게 이유가 됨?)
+        - 1. 이런식으로 Background color를 섞지 않을 것
+            - AlphaComposite blend mode로 할 것.
+            ? AlphaComposite blend mode가 무엇이지
+        - 2. background color를 이렇게 blurring, scattering 하지 않을 것
+            - Shopf[2] 참고할 것!
+            - 이 page의 수식들은 위의 Shopf[2]에서 많이 참고됨.
+            - 여기 page는 수식들을 artist friendly하게 만들려는 시도
+            - + explaining the relationships 더 간단하게!
+    ? 이게 어떻게 Radiance 식이 됨?
+        내가아는 Radiance식은 여기 15page 인데 : https://www.slideshare.net/jeannekamikaze/introduction-to-path-tracing
+
+Example Shadowed Volume Code
+[#1]
+- 코드에서 확인할 수 있듯 기본 shadowing만 집어넣는 것이 코드를 매우 복잡하게 한다.
+
+[#2]
+- 시작하면서 camera vector / light vector 에 미리 stepsize가 곱해진다.
+    ? camera vector에 곱해지는건 안보이는데?
+- premultiply하는 이유는
+    - inner loop (main loop)에서 연산을 최대한 적게 하기 위함
+- 지금 상태의 shader code는 매우 느리다.
+- 지금 코드는 opacity가 0.001 이상일 때만 체크해서 loop를 돈다.
+    - 이것보다 더 많은 optimization이 필요하다.
+
+[#3]
+- 위의 코드의 가장 큰 문제는 모든 density sample에 대해서 shadow step이 진행된다는 것
+    - 만약 64 dennsity step이 있고 64 shadow step이 있으면 64*64 번 sampling이 일어난다.
+    - 우리가 사용하는 psedovolume function은 2번 texture lookup하므로, 이와 같으면
+        - 4096(64*64) * 2번의 texture lookup이 1pixel 당 필요. (매우 안좋)
+    - 적용가능한 최적화
+        - full absortption 될 때 중단 (모두 흡수)
+        -  volume을 나갈 때 중단
+
+[#4]
+- <volume 나가는 것 판단>
+    - 'if(lpos.x > 1 || lpos.x < 0 || lpos.y > 1 || lpos.y < 0 || lpos.z > 1 || lpos.z < 0) break;'
+    - voxel 이라서 x,y,z
+- 위와 같은 체크는 사실 느리다.
+- shadow를 boxtest 하는게 빠름 
+    - (코드)
+- <absorption 체크>
+    - transmittance가 threshold 이하(미만)이면 유효하지 않다고 판단
+    - visual artifact가 일어나지 않는 가장 큰 값을 threshold로 잡아야 한다.
+    - 그러나 쉽게 판단 불가능
+        - 이렇게 안됨 if( transmittance < threshold) break;
+        - transmittance는 iteration마다 결정되는 게 아니고
+        - linear density를 accumulate하는 것 일 뿐
+        - 따라서 threshold를 transmittance 기준이 아니라
+        - 'distance'를 기준으로 설정해야한다. (?)
+
+[#5]
+- e^ -(t * d) 를 inverse (지수에 -1을 다시 곱함)
+- 어떤 t의 값에서 (t가 volume내에서 진행한 거리임)
+    - transmittance가 일정값 미만으로 떨어지는 지 알아야함.
+    - 0.001의 transmittance threshold를 준다고 할 때
+    - t의 threshold는
+        - DistanceThreshold = -log(0.001) / d;
+    - user defined density가 1이라 할 때 (위의 식 d)
+        ? density를 user define 한다는게 무슨 소리?
+        - DistnaceThreshold는 6.907755가 나온다.
+    - 대문자로 적힌 ShadowThreshold는 문맥상
+        - Transmittance Threshold가 맞고
+        - shadowthres이게 Transmittance threshold를 distance 기준으로 바꾼 것
+
+Updated Shadow Code
+[#1]         
+optimization 2개를 적용한 코드
+
+[#2]
+- 여기까지 한 내용 정리
+    - translucent ray volume ray marcher 구현 완료
+    - self shadow 지원 (1 dir light에 대해)
+- dir light 대신에 point light 쓰려면
+    - inverse squared fall off를 계산해 줄 것
+    - 매 shadow term에서 계산 
+    - + CurPos 를 매번 다시 계산해줘야함. density sample마다
+
+Ambient Light
+[#1]
+- 여기까지 했으면 Out-Scattering 만 고려한 것 (single dir light)
+- ambient light 필요
+- pre calc 방식은 volume의 rotation을 handle할 수 없음
+- 매 voxel마다 윗방향 ray를 sparce하게 cast해서 overhead shadow를 체크하는 방식이 있음.
+    - 꽤 좋은 결과가 나온다.
+
+[#2]
+- dynamic ambient term이 prebaked (pre calc)방식보다 좋은 이유
+    - Horizon Zero Dawn Paper에 이유가 등장.
+    - pre clac 방식이 호제던 방식과 잘 안맞는다고함. (여기서 별로 중요한 내용은 아님)
+
+[#3]
+- overhead ambient occlusion 계산하는 코드
+- lpos부분만 추가되면 될 듯? 아래 3줄은 temp val 없애는 코드임
+
+Light Extinction Color
+[#1]
+- 지금까지 LightColor를 per density sample 로 
+    - shadow term 에만 적용했음
+- 이렇게 하면 scattering 진행 시depth마다 color가 변경되지 않음.
+- cloud 내에서 scattering은 '미 산란'(mie scattering) 이다.
+    - light wavelength가 보존되는 산란.
+    - 따라서 single color scattering은 나쁜 아이디어가 아님.
+
+[#2]
+- 
+
+Additional Shadowing Options
+- 이건 안해도 될 듯.
+
+Temporal Jitter
+[#1] 
+- texture의 resolution 부족등의 이유로 slice artifact가 생길 수 있음
+- or low step count
+    - Temporal Jitter
+        - 진동시켜주면서, 진동시킨 결과를 부드럽게함.
+        - artifact 감소시킴
+
+[#2]
+
+
