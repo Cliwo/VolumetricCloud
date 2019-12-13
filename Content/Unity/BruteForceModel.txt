@@ -1,0 +1,201 @@
+/*
+Input :
+    FragmentWorldPos (i.rayDir)
+    ScreenSpaceUV (i.uv)
+    MaxAltitude
+    MinAltitude
+
+    float3 pos 
+    float bias 
+    float maxAltitude 
+    float2 coverageRange 
+    float2 wind
+    Time
+    WindScale
+    CoverageTex
+
+    _CloudScale
+    _CloudDetailScale
+
+    _NWindScale
+    _WindScale
+
+    _CloudHeightGradient1
+    _CloudHeightGradient2
+    _CloudHeightGradient3
+
+    _NoiseTex01
+    XYFrames
+
+    _NoiseBias
+    _NoiseEdgeBias
+*/
+
+struct Function
+{
+    float UVRandom(float2 uv) {
+	    return frac(43758.5453 * sin(dot(float2(12.9898, 78.233), uv.yx)));
+    }
+
+    float Lerp3(float v0, float v1, float v2, float a)
+    {
+        return a < 0.5 ? lerp(v0, v1, a * 2.0) : lerp(v1, v2, (a - 0.5) * 2.0);
+    }
+
+    float GradientStep(float a, float4 gradient)
+    {
+        return smoothstep(gradient.x, gradient.y, a) - smoothstep(gradient.z, gradient.w, a);
+    }
+
+    float4 SampleCoverage(float Time, float WindScale, 
+        Texture2D CoverageTex, SamplerState TexSampler, 
+        float3 pos, float bias, float maxAltitude, float2 coverageRange, float2 wind)
+    {
+        float3 uvPos = pos / maxAltitude;
+
+        bias *= pow(uvPos.y, pow(bias, 2));
+
+        float2 uv = (uvPos.xz  * bias) *0.5 + 0.5;
+        uv += float2(0.01 * wind.x, 0.01 * wind.y) * Time * WindScale;
+
+        float dist = (length(pos) * pos.y) / (maxAltitude*maxAltitude) * 0.15 + 0.15;
+
+        float alpha = smoothstep(coverageRange.x, coverageRange.y, dist);
+
+        float4 coverageS = CoverageTex.SampleLevel(TexSampler, uv , 0);
+        float2 coverageR = float2(alpha, smoothstep(coverageRange.y, coverageRange.x + (coverageRange.y - coverageRange.x) * 0.5, dist));
+
+        coverageS.rg = saturate(lerp(coverageS.rg, coverageR, alpha));
+        coverageS.ba = saturate(lerp(coverageS.ba, coverageR, alpha));
+
+        return coverageS;
+    }
+
+    float SampleCloud(float Time,
+        float CloudScale, float CloudDetailScale, float NWindScale, float WindScale, 
+        float4 CloudHeightGradient1, float4 CloudHeightGradient2, float4 CloudHeightGradient3,
+        Texture2D NoiseTex01, SamplerState TexSampler, int XYFrames,
+        float NoiseBias, float NoiseEdgeBias,
+        float3 uvw, float h, float2 coverage, float minA, float maxA)
+    {
+        const float baseFreq = 1e-5;
+
+        float noiseFreq1 = 10;
+        float noiseFreq2 = 20;
+
+        //UV-----
+        float4 uvw1 = float4(uvw * noiseFreq1 * baseFreq * CloudScale, 0);
+
+        //Wind
+        uvw1.xyz += float3(0.0001, -0.001, 0) * Time * NWindScale * WindScale;
+
+        //Height Gradient-----
+        h = saturate(h);
+
+        float4 gradientScalar = float4(1.0,
+            saturate(GradientStep(h, CloudHeightGradient1)),
+            saturate(GradientStep(h, CloudHeightGradient2)),
+            saturate(GradientStep(h, CloudHeightGradient3)));
+
+        float4 gradient = Lerp3(CloudHeightGradient3,
+            CloudHeightGradient2,
+            CloudHeightGradient1,
+            coverage.y);
+        float hGradient = GradientStep(h, gradient);
+
+        //Tex01-----
+
+        float4 n1 = PseudoVolumeTexture(NoiseTex01, TexSampler, uvw1.xyz, XYFrames, XYFrames * XYFrames);
+
+        //Set Noise with Height Gradient
+        n1 = saturate(((n1 * gradientScalar) - 0.15) * 0.9 + 0.3);
+
+        float cloudValue = (n1.r + n1.g + n1.b + n1.a) / 4;
+        cloudValue = saturate(cloudValue * hGradient);
+        cloudValue = smoothstep(NoiseBias, NoiseBias + NoiseEdgeBias, cloudValue);
+        cloudValue = saturate(pow(cloudValue, 1.75));
+        cloudValue = cloudValue + (0.1 - (0.25 - (cloudValue * 0.1)));
+        cloudValue = saturate(cloudValue - (1.0 - coverage.x)) * coverage.x; //coverage 
+
+        return saturate(cloudValue);
+    }
+
+
+    float Raymarch(float3 FragmentWorldPos, float2 ScreenSpaceUV, int SampleNum, 
+        float MinAltitude, float MaxAltitude, float OffsetNoiseBias,
+
+        float Time, float NWindScale, float WindScale, float2 Wind,
+        Texture2D CoverageTex, SamplerState CoverageTexSampler, 
+        float CoverageBias, float2 CoverageRange,
+
+        float CloudScale, float CloudDetailScale,  
+        float4 CloudHeightGradient1, float4 CloudHeightGradient2, float4 CloudHeightGradient3,
+        Texture2D NoiseTex01, SamplerState NoiseTexSampler, int XYFrames,
+        float NoiseBias, float NoiseEdgeBias
+        )
+
+    {
+        float3 ray = FragmentWorldPos - Parameters.CameraVector;
+        float2 uv = ScreenSpaceUV;
+
+        float depth = 0, Hdepth = 0;
+        float minDist, maxDist;
+        float dotT = dot(normalize(ray), float3(0, 1, 0));
+        float AltitudeGap = MaxAltitude - MinAltitude;
+
+        minDist = MinAltitude / ray.y; 
+		maxDist = MaxAltitude / ray.y;
+
+        MaxAltitude = MinAltitude + (AltitudeGap * saturate(saturate(dotT)));
+
+        float rand = UVRandom(uv);
+
+        int stepSamples = SampleNum;
+        float stepSize = (maxDist - minDist) / stepSamples;
+
+        float stepPosOffset = saturate(stepSize * rand) * OffsetNoiseBias;
+        float3 stepPos = (ray * (minDist + stepPosOffset));
+        float3 stepHPos = (ray * (minDist + stepSize));
+
+        float nCoeff = 1 + (stepSize / maxDist);
+
+        for (int s = 0; s < stepSamples; s++)
+        {
+            if (depth > 1 || stepPos.y > MaxAltitude)
+            //최적화, depth가 1이 넘어버리면 탈출, 또는 y가 Max를 넘어도 탈출. 
+                break;
+
+            float height = (stepHPos.y - MinAltitude) / AltitudeGap; //[0,1] 사이의 값.
+            float4 coverage = SampleCoverage(Time, WindScale, CoverageTex, CoverageTexSampler, stepPos, CoverageBias, MaxAltitude, CoverageRange, Wind);
+            float n = SampleCloud(Time,
+                CloudScale, CloudDetailScale, NWindScale, WindScale, 
+                CloudHeightGradient1, CloudHeightGradient2, CloudHeightGradient3,
+                NoiseTex01, NoiseTexSampler, XYFrames,
+                NoiseBias, NoiseEdgeBias,
+                stepPos, height, coverage, MinAltitude, MaxAltitude);
+            
+            float density = n * nCoeff; 
+            depth += (1.0 - depth) *  density;
+
+            stepPos += ray * stepSize;
+            stepHPos += ray * stepSize; 
+        }
+
+        float final = 1 - depth;
+        return final;
+    }
+};
+Function f;
+float value = f.Raymarch(FragmentWorldPos, ScreenSpaceUV, SampleNum, 
+        MinAltitude,  MaxAltitude, OffsetNoiseBias,
+
+        Time,  NWindScale,  WindScale,  Wind,
+        CoverageTex, CoverageTexSampler, 
+        CoverageBias, CoverageRange,
+
+        CloudScale,  CloudDetailScale,  
+        CloudHeightGradient1,  CloudHeightGradient2,  CloudHeightGradient3,
+        NoiseTex01, NoiseTex01Sampler, XYFrames,
+        NoiseBias,  NoiseEdgeBias
+);
+return float3(value,value,value);
