@@ -1,0 +1,40 @@
+//SampleCoverage
+/*
+float3 pos 
+float bias 
+float maxAltitude 
+float2 coverageRange 
+float2 wind
+Time
+WindScale
+CoverageTex
+*/
+
+struct Function
+{
+    float4 SampleCoverage(Texture2D CoverageTex, SamplerState TexSampler, float3 pos, float bias, float maxAltitude, float2 coverageRange, float2 wind)
+    {
+        float3 uvPos = pos / maxAltitude;
+
+        bias *= pow(uvPos.y, pow(bias, 2));
+
+        float2 uv = (uvPos.xz  * bias) *0.5 + 0.5;
+        uv += float2(0.01 * wind.x, 0.01 * wind.y) * Time * WindScale;
+
+        float dist = (length(pos) * pos.y) / (maxAltitude*maxAltitude) * 0.15 + 0.15;
+
+        float alpha = smoothstep(coverageRange.x, coverageRange.y, dist);
+
+        float4 coverageS = CoverageTex.SampleLevel(TexSampler, uv , 0);
+        float2 coverageR = float2(alpha, smoothstep(coverageRange.y, coverageRange.x + (coverageRange.y - coverageRange.x) * 0.5, dist));
+
+        coverageS.rg = saturate(lerp(coverageS.rg, coverageR, alpha));
+        coverageS.ba = saturate(lerp(coverageS.ba, coverageR, alpha));
+
+        return coverageS;
+    }
+};
+
+Function f;
+//return f.SampleCoverage(CoverageTex, CoverageTexSampler, Pos, Bias, MaxAltitude, CoverageRange, Wind);
+return float(1,1,1,1);

@@ -1,0 +1,4 @@
+float UVRandom(float2 uv) 
+{
+	return frac(43758.5453 * sin(dot(float2(12.9898, 78.233), uv.yx)));
+}

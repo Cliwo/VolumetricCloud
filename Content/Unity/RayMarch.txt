@@ -1,0 +1,55 @@
+/*
+Input :
+    FragmentWorldPos (i.rayDir)
+    ScreenSpaceUV (i.uv)
+    MaxAltitude
+    MinAltitude
+*/
+
+struct Function
+{
+    float UVRandom(float2 uv) {
+	    return frac(43758.5453 * sin(dot(float2(12.9898, 78.233), uv.yx)));
+    }
+};
+
+Function f;
+float3 ray = FragmentWorldPos - Parameters.CameraVector;
+float2 uv = ScreenSpaceUV;
+
+float depth = 0, Hdepth = 0;
+float minDist, maxDist;
+float dotT = dot(normalize(ray), float3(0, 1, 0));
+float AltitudeGap = MaxAltitude - MinAltitude;
+MaxAltitude = MinAltitude + (AltitudeGap * saturate(saturate(dotT)));
+
+float rand = f.UVRandom(uv);
+
+int stepSamples = SampleNum;
+float stepSize = (maxDist - minDist) / stepSamples;
+
+float stepPosOffset = saturate(stepSize * rand) * OffsetNoiseBias; //My opt
+float3 stepPos = (ray * (minDist + stepPosOffset));
+float3 stepHPos = (ray * (minDist + stepSize));
+
+float nCoeff = 1 + (stepSize / maxDist);
+
+for (int s = 0; s < stepSamples; s++)
+{
+    if (depth > 1 || stepPos.y > MaxAltitude)
+    //최적화, depth가 1이 넘어버리면 탈출, 또는 y가 Max를 넘어도 탈출. 
+        break;
+
+    float height = (stepHPos.y - MinAltitude) / AltitudeGap; //[0,1] 사이의 값.
+    //float4 coverage = sampleCoverage(stepPos, _CoverageBias, _MaxAltitude, float2(0.8, 1.3), float2(_CWindScaleX, _CWindScaleY));
+    //float n = SampleCloud(stepPos, height, coverage.rg, _MinAltitude, _MaxAltitude);
+
+    //float density = n * nCoeff; 
+    //depth += (1.0 - depth) *  density;
+
+    stepPos += ray * stepSize;
+    stepHPos += ray * stepSize; 
+}
+
+float final = 1 - depth;
+return fixed4(final, final, final, 1);

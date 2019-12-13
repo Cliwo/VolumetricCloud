@@ -1,0 +1,98 @@
+//https://shaderbits.com/blog/creating-volumetric-ray-marcher
+//Expected Input : 
+// Tex, XYFrames, StepSize, MaxSteps, FinalStep, CurPos, Density, ShadowSteps, ShadowDensity, LightVector,
+// ShadowThreshold, LightColor, SkyColor, AmbientDensity, Jitter
+
+// Jitter -> 이 부분 안함
+// LightColor -> 블로그의 코드에서는 나오는 부분이 없음, 내가 임의로 넣음
+// SkyColor 부분 -> 여기도 어디에 정확히 넣어야하는지 불분명해서 내가 임의로 넣음 
+
+float numFrames = XYFrames * XYFrames;
+float accumdist = 0;
+float curdensity = 0;
+float transmittance = 1;
+float3 localcamvec = normalize( mul(Parameters.CameraVector, GetPrimitiveData(Parameters.CameraVector).WorldToLocal) ) * StepSize;
+
+float shadowstepsize = 1 / ShadowSteps;
+LightVector *= shadowstepsize;
+ShadowDensity *= shadowstepsize;
+
+Density *= StepSize;
+float3 lightenergy = 0;
+float shadowthresh = -log(ShadowThreshold) / ShadowDensity;
+
+for (int i = 0; i < MaxSteps; i++)
+{
+    float cursample = PseudoVolumeTexture(Tex, TexSampler, saturate(CurPos), XYFrames, numFrames).r;
+
+    //Sample Light Absorption and Scattering
+    if( cursample > 0.001)
+    {
+        float3 lpos = CurPos;
+        float shadowdist = 0;
+
+        for (int s = 0; s < ShadowSteps; s++)
+        {
+            lpos += LightVector;
+            float lsample = PseudoVolumeTexture(Tex, TexSampler, saturate(lpos), XYFrames, numFrames).r;
+
+            float3 shadowboxtest = floor( 0.5 + ( abs( 0.5 - lpos ) ) );
+            float exitshadowbox = shadowboxtest .x + shadowboxtest .y + shadowboxtest .z;
+            shadowdist += lsample;
+
+            if(shadowdist > shadowthresh || exitshadowbox >= 1) break;
+        }
+
+        curdensity = saturate(cursample * Density);
+        float shadowterm = exp(-shadowdist * ShadowDensity);
+        float3 absorbedlight = shadowterm * curdensity;
+        lightenergy += absorbedlight * transmittance * LightColor;
+        // lightenergy += absorbedlight * transmittance;
+        transmittance *= 1-curdensity;
+    }
+    CurPos -= localcamvec;
+}
+
+CurPos += localcamvec * (1 - FinalStep);
+float cursample = PseudoVolumeTexture(Tex, TexSampler, saturate(CurPos), XYFrames, numFrames).r;
+
+//Sample Light Absorption and Scattering
+if( cursample > 0.001)
+{
+    float3 lpos = CurPos;
+    float shadowdist = 0;
+
+    for (int s = 0; s < ShadowSteps; s++)
+    {
+        lpos += LightVector;
+        float lsample = PseudoVolumeTexture(Tex, TexSampler, saturate(lpos), XYFrames, numFrames).r;
+
+        float3 shadowboxtest = floor( 0.5 + ( abs( 0.5 - lpos ) ) );
+        float exitshadowbox = shadowboxtest .x + shadowboxtest .y + shadowboxtest .z;
+        shadowdist += lsample;
+        if(shadowdist > shadowthresh || exitshadowbox >= 1) break;
+    }
+    curdensity = saturate(cursample) * Density;
+    float shadowterm = exp(-shadowdist * ShadowDensity);
+    float3 absorbedlight = shadowterm * curdensity;
+    lightenergy += absorbedlight * transmittance;
+    transmittance *= 1-curdensity;
+
+    //Sky Lighting
+    //(12-01) Is here right place?
+    shadowdist = 0;
+
+    lpos = CurPos + float3(0,0,0.05);
+    float lsample = PseudoVolumeTexture(Tex, TexSampler, saturate(lpos), XYFrames, numFrames).r;
+    shadowdist += lsample;
+    lpos = CurPos + float3(0,0,0.1);
+    lsample = PseudoVolumeTexture(Tex, TexSampler, saturate(lpos), XYFrames, numFrames).r;
+    shadowdist += lsample;
+    lpos = CurPos + float3(0,0,0.2);
+    lsample = PseudoVolumeTexture(Tex, TexSampler, saturate(lpos), XYFrames, numFrames).r;
+    shadowdist += lsample;
+
+    lightenergy += exp(-shadowdist * AmbientDensity) * curdensity * SkyColor * transmittance;
+}
+
+return float4( lightenergy, transmittance);
